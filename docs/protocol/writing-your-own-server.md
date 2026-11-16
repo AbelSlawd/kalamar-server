@@ -138,6 +138,7 @@ expected decision of every scenario from the declared result policy with the nor
 | parties | `parties.lifecycle` (create, invite, join, leader, kick, leave), `parties.queue` (when a queue accepts parties: party kept on one team) |
 | friends | `friends.requests` (by code, accept, decline, cancel, remove, code rotation), `friends.presence` (with `presence`) |
 | ratings | `ratings.ladders`, `ratings.change` (a rated match produces rating changes and views for every participant) |
+| ratings (1.1.14) | `ratings.participants` (the rated match of `ratings.change` seen by a player: every participant's `rating` has the shape of [api.md](api.md#participant-ratings-1114), its `ladder` is `rules.ladder`, its `display` is that of the player's rating view, a `position` is the `rank` of the player's own leaderboard row `you`; no `rating` in the public view, with `stats`; skipped when no participant has one) |
 | leaderboards | `leaderboards.shape` (columns, rows, players) |
 | stats | `stats.history` (the match appears with the right result), `stats.groups` |
 | moderation | `moderation.report`, `moderation.block` |

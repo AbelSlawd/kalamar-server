@@ -814,7 +814,7 @@ The participant view (`GET /v1/matches/{id}` by a participant, and every `match.
 | `state` | see [Lifecycle](#lifecycle). Unknown state: treat as `running` and refetch later |
 | `origin` | `{"kind": "room", "room_id"}` or `{"kind": "queue", "queue_id"}`; unknown kind: show nothing |
 | `rules` | **authoritative** rules: actual `teams` sizes of this match, `mode`, `stage` (`null` = the game's choice), `options` (the server's other options, echoed), whether it is `rated`, its `ladder` and `season`, and the `result_policy` id |
-| `participants` | every player, in a fixed order. `member_name`: the name this player uses in the game and on the relay ([match-contract.md](match-contract.md#member-names)); `team`: `alpha` or `bravo`; `role`: `host` (creates the game session) or `join`; `accept`: `pending`, `accepted`, `declined` (`accepted` for room matches); `launched`: the launcher reported the launch; `status`: the last mirrored game state and when it was received, or `null`; `reported`: a terminal report (result or error) was received |
+| `participants` | every player, in a fixed order. `member_name`: the name this player uses in the game and on the relay ([match-contract.md](match-contract.md#member-names)); `team`: `alpha` or `bravo`; `role`: `host` (creates the game session) or `join`; `accept`: `pending`, `accepted`, `declined` (`accepted` for room matches); `launched`: the launcher reported the launch; `status`: the last mirrored game state and when it was received, or `null`; `reported`: a terminal report (result or error) was received; 1.1.14, optional: `rating`, the player's rating, tier and leaderboard position ([below](#participant-ratings-1114)) |
 | `you` | the caller's own entry, for convenience; 1.1.10: `free: true` when the caller's report is in and the match no longer holds it ([Lifecycle](#lifecycle)) |
 | `game` | the values of the [match contract](match-contract.md). Present only to participants and only from state `ready` on |
 | `deadlines` | `accept` (state `pending_accept`), `launch` (every participant must have reported its launch), `result` (the latest time for results). A deadline MAY move (the server sends `match.updated`) |
@@ -824,8 +824,31 @@ The participant view (`GET /v1/matches/{id}` by a participant, and every `match.
 | `spectators` | 1.1.7, participants only: the match's spectators (`user`, `member_name`, `role`, `referee`, `launched`, `left`, `status`, `reported`), shown to every player; never in `participants`. With them `you.team` is `spectator` for a spectator, `you.seat` `player` or `spectator`, `rules.spectators` the places ([spectators.md](spectators.md#4-the-match-object)) |
 
 Non-participants (with `stats`) get the public view of an ended match: `id`, `state`, `origin`, `rules`,
-`participants` (only `user`, `team`), `ended_at`, `outcome` (without `players` verdicts). They get `404 not_found`
-for a match that has not ended.
+`participants` (only `user`, `team`: never a `rating`), `ended_at`, `outcome` (without `players` verdicts). They get
+`404 not_found` for a match that has not ended.
+
+#### Participant ratings (1.1.14)
+
+With `ratings`, each entry of `participants` MAY carry `rating` in the view of a participant (a player or, 1.1.7, a
+spectator of the match), so that the match screens show every player's rank:
+
+```json
+{"ladder": "duel", "value": 1423, "display": "1423",
+ "tier": {"id": "gold", "name": {"en": "Gold"}, "color": "#D4AF37", "order": 3},
+ "position": 5, "provisional": null}
+```
+
+| Member | Meaning |
+|---|---|
+| `ladder` | the ladder the rating is on: `rules.ladder` when set; a match without one MAY show another ladder's ratings (the reference server: the ladder its queue balances teams with). No ladder: no `rating` |
+| `value`, `display`, `tier` | as in the player's [rating view](#rating-view) on that ladder and the match's season (`rules.season`, else the current one); `null` during placement |
+| `position` | the player's place on the ladder's [leaderboard](#leaderboard), 1 for the first: the `rank` its own row `you` shows. `null` during placement, for a player who turned `show_on_leaderboards` off, and on a ladder without a leaderboard |
+| `provisional` | `{"remaining"}`: placement matches left, as in the rating view; `null` once placed |
+
+A player without a rating on the ladder yet is in placement (`remaining` is all the placement matches). The values are
+those of the moment the match object is sent, not a snapshot: after the decision they include the match. A seat
+without an account has no `rating`; neither does any participant in the public view. A launcher shows `display` (else
+`value`) and the tier next to each player, and a missing member as nothing.
 
 ### Lifecycle
 
@@ -1457,6 +1480,7 @@ Every addition is optional for servers (gated by `features`) and ignorable by 1.
 | results (1.1.11) | policy `leave` (`void`, `forfeit`, `forfeit_unrated`), step 3b, error report member `in_play`, outcome and history `forfeit`, `unrated_reason: forfeit`; a two-player match left in play decided `grace_s` after the departure | [above](#result-decision), [leaving.md](leaving.md#4-forfeit-1111) |
 | results (1.1.12) | no new member: steps 5, 6 and 8 tightened (an error never supports a result, a duel's record never explains the other player's error, a match is rated only when each team confirmed the record or a referee did), the table of what one participant can do alone | [above](#result-decision), [security-model.md](../security-model.md) |
 | relays (1.1.13) | error `503 relay_capacity` with `retry_after_s`; engine errors `relay-full`, `relay-room-full`, `relay-source-limit`, `relay-source-full` | [relay.md](relay.md#43-relays-that-announce-their-load-1113) |
+| ratings (1.1.14) | match `participants[].rating` in the participant view: each player's rating, tier and leaderboard position on the match's ladder | [above](#participant-ratings-1114) |
 
 Additive members: match `series` and `game.keep_open` / `game.continue_from` / contract 2 `game`; match rules
 `loadout`; `origin.kind = "activity"` with `activity_id`; match state `under_review`; result policy `decider` and

@@ -14,7 +14,9 @@ player), **tiers of the server's own design** over that value (Rookie, Bronze, S
 configurable), **seasons** (`admin season-roll`: rating pulled halfway back to 1500, deviation at least 250, placement
 again). Unrated queues balance teams with a ladder's ratings (`balance_ladder`). Matchmaking: the oldest ticket
 anchors a search whose rating window widens with waiting time; teams shrink step by step to `min_teams` after
-`shrink_after_s`; parties stay on one team; the most even split is chosen.
+`shrink_after_s`; parties stay on one team; the most even split is chosen. In a match, its players and spectators see
+each player's rating, tier and leaderboard position on the match's ladder, or on the `balance_ladder` of an unrated
+queue (protocol 1.1.14, [api.md](protocol/api.md#participant-ratings-1114)).
 
 ## Activities and series
 

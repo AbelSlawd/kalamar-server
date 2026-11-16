@@ -16,7 +16,7 @@ Everything in this repository, by reader. New here? Start with the [README](../R
 | [Security model](security-model.md) | who is trusted, what one cheater can and cannot do, the residual risks, the findings of the security review and what was done |
 | [`deploy/`](../deploy) | the installer, example configurations, systemd units, Caddy and nginx examples, the Dockerfile |
 
-## The protocol (version 1.1, revision 1.1.13)
+## The protocol (version 1.1, revision 1.1.14)
 
 Read the overview first; the other pages are the normative specification, with [openapi.yaml](protocol/openapi.yaml)
 for the HTTPS API.

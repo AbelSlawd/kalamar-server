@@ -15,10 +15,10 @@ from the documentation alone**.
 
 ## Status
 
-The protocol is at version 1.1, revision 1.1.13, the first public revision (`docs/protocol/overview.md` lists what
-each revision added), which the reference server implements. The programs are at version 0.1.0: a program version
-names a build of this repository, a protocol revision names what launchers and servers agree on. What has been
-checked, and what has not:
+The protocol is at version 1.1, revision 1.1.14 (1.1.13 was the first public revision; `docs/protocol/overview.md`
+lists what each revision added), which the reference server implements. The programs are at version 0.1.0: a
+program version names a build of this repository, a protocol revision names what launchers and servers agree on.
+What has been checked, and what has not:
 
 - `cargo test --workspace` runs the unit and HTTP tests and the **conformance suite** against three server offerings,
   with simulated launchers and a simulated game.
@@ -57,7 +57,7 @@ repository in ten minutes ([docs/architecture.md](docs/architecture.md)).
 
 | Path | What |
 |---|---|
-| [`docs/protocol/`](docs/protocol/overview.md) | **The specification, version 1.1** (1.1.13; 1.1 only adds to 1.0): overview (actors, trust, privacy, versioning, errors), server card and discovery, HTTPS API + [OpenAPI](docs/protocol/openapi.yaml), event WebSocket, match contracts 1 and 2, relay, activities, series, the stage draft, spectators, a player who leaves and the forfeit, presentation, operator integrations, rules for extending, writing your own server |
+| [`docs/protocol/`](docs/protocol/overview.md) | **The specification, version 1.1** (1.1.14; 1.1 only adds to 1.0): overview (actors, trust, privacy, versioning, errors), server card and discovery, HTTPS API + [OpenAPI](docs/protocol/openapi.yaml), event WebSocket, match contracts 1 and 2, relay, activities, series, the stage draft, spectators, a player who leaves and the forfeit, presentation, operator integrations, rules for extending, writing your own server |
 | `crates/kalamar-protocol` | the normative pieces as a library: match contract helpers, result validation, the result decision procedure |
 | `crates/kalamar-service` | the reference service (HTTP API, events, matchmaking, decisions, ratings, admin command line) |
 | `crates/kalamar-relay` | the UDP relay matches run through (relay protocol v1), standalone binary |

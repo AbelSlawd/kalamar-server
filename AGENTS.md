@@ -6,7 +6,7 @@ others read it directly) and for the people who drive them: what the code does n
 
 ## Map
 
-The open protocol of Kalamar's community servers (version 1.1, revision 1.1.13) and its reference implementation.
+The open protocol of Kalamar's community servers (version 1.1, revision 1.1.14) and its reference implementation.
 The launcher and the game live in the other repository, `Kalamar`; they implement their side of what is specified here.
 
 | Path | What |

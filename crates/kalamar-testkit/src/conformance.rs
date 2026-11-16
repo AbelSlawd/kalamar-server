@@ -1371,6 +1371,36 @@ fn check_contract(views: &[Value]) -> R {
             v["you"]["member_name"].is_string() && v["deadlines"]["launch"].is_string(),
             "you / deadlines"
         );
+        check_participant_ratings(v)?;
+    }
+    Ok(())
+}
+
+/// 1.1.14: the shape of each participant's `rating` in a participant view, when there is one (the member is
+/// optional): its `ladder` is the match's when `rules.ladder` is set.
+fn check_participant_ratings(v: &Value) -> R {
+    let ladder = &v["rules"]["ladder"];
+    for p in v["participants"].as_array().into_iter().flatten() {
+        let Some(r) = p.get("rating") else { continue };
+        // Present, and `null` or of its type.
+        let has = |k: &str, ok: &dyn Fn(&Value) -> bool| r.get(k).is_some_and(|x| x.is_null() || ok(x));
+        let tier = |t: &Value| t["id"].is_string() && t["name"].is_object() && t["order"].is_u64();
+        let place = |n: &Value| n.as_u64().is_some_and(|n| n >= 1);
+        let placement = |x: &Value| x["remaining"].is_u64();
+        check!(
+            r["ladder"].is_string() && (ladder.is_null() || r["ladder"] == *ladder),
+            "participant rating on ladder {} in a match of ladder {ladder}",
+            r["ladder"]
+        );
+        check!(
+            has("value", &Value::is_number)
+                && has("display", &Value::is_string)
+                && has("tier", &tier)
+                && has("position", &place)
+                && has("provisional", &placement),
+            "participant rating shape: {}",
+            compact(r)
+        );
     }
     Ok(())
 }
@@ -2688,6 +2718,85 @@ async fn ratings_change(c: &mut Ctx) -> R {
     Ok(())
 }
 
+/// 1.1.14: the rated match of `ratings.change`, seen again by one of its players: each participant's `rating` has
+/// the shape of the participant view, shows what the player's rating view shows, and a `position` is the rank of the
+/// player's own leaderboard row; the public view has none.
+async fn ratings_participants(c: &mut Ctx) -> R {
+    let Some((m, players)) = c.rated.clone() else {
+        return skip("no rated match was played (no eligible rated queue)");
+    };
+    let mid = m["id"].as_str().unwrap_or_default().to_string();
+    let idx = c.pool(players.len() + 1).await?;
+    let of = |c: &Ctx, id: &str| idx.iter().copied().find(|&i| c.pool[i].id == id);
+    let Some(me) = of(c, &players[0]) else {
+        return fail("the players of the rated match are not in the pool");
+    };
+    let r = c.pool[me].api.get(&format!("/v1/matches/{mid}")).await;
+    expect(&r, 200, "GET /v1/matches/{id} by a player")?;
+    let view = r.body;
+    check_participant_ratings(&view)?;
+    let rated: Vec<(String, Value)> = view["participants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["user"]["id"].as_str()?.to_string(), p.get("rating")?.clone())))
+        .collect();
+    if rated.is_empty() {
+        return skip("no participant has a rating (optional)");
+    }
+    let season = view["rules"]["season"]
+        .as_str()
+        .map(|s| format!("?season={s}"))
+        .unwrap_or_default();
+    for (user, rating) in &rated {
+        let ladder = rating["ladder"].as_str().unwrap_or_default();
+        let r = c.pool[me].api.get(&format!("/v1/users/{user}/ratings{season}")).await;
+        expect(&r, 200, "GET /v1/users/{id}/ratings")?;
+        let shown = r.body["items"]
+            .as_array()
+            .and_then(|i| i.iter().find(|v| v["ladder"] == ladder).cloned());
+        if let Some(shown) = shown {
+            check!(
+                shown["display"] == rating["display"] && shown["value"] == rating["value"],
+                "participant rating {} differs from the rating view {}",
+                compact(rating),
+                compact(&shown)
+            );
+        }
+        let (Some(position), Some(own)) = (rating["position"].as_u64(), of(c, user)) else {
+            continue;
+        };
+        if !c.declared("leaderboards") {
+            continue;
+        }
+        let r = c.pool[own]
+            .api
+            .get(&format!("/v1/ladders/{ladder}/leaderboard{season}"))
+            .await;
+        if r.status == 200 && r.body["you"].is_object() {
+            check!(
+                r.body["you"]["cells"]["rank"].as_u64() == Some(position),
+                "participant position {position} where the leaderboard's own row says {}",
+                r.body["you"]["cells"]["rank"]
+            );
+        }
+    }
+    if c.declared("stats") {
+        let Some(other) = idx.iter().copied().find(|&i| !players.contains(&c.pool[i].id)) else {
+            return fail("no account outside the rated match");
+        };
+        let r = c.pool[other].api.get(&format!("/v1/matches/{mid}")).await;
+        expect(&r, 200, "GET /v1/matches/{id} by a non-participant")?;
+        check!(
+            r.body["participants"]
+                .as_array()
+                .is_some_and(|ps| ps.iter().all(|p| p.get("rating").is_none())),
+            "a participant's rating in the public view of a match"
+        );
+    }
+    Ok(())
+}
+
 async fn leaderboards_shape(c: &mut Ctx) -> R {
     let idx = c.pool(1).await?;
     let r = c.pool[idx[0]].api.get("/v1/ladders").await;
@@ -2922,6 +3031,7 @@ pub async fn run(opts: Options) -> Report {
     scenario!("presence.friends", "presence", friends_presence);
     scenario!("ratings.ladders", "ratings", ratings_ladders);
     scenario!("ratings.change", "ratings", ratings_change);
+    scenario!("ratings.participants", "ratings", ratings_participants);
     scenario!("leaderboards.shape", "leaderboards", leaderboards_shape);
     scenario!("stats.history", "stats", stats_history);
     scenario!("moderation.report", "moderation", moderation_report);

@@ -184,7 +184,7 @@ discovery document.
   extending are in [extending.md](extending.md)). The API's paths carry the major version
   (`/v1/...`). A server lists the versions it speaks in `protocol.versions` of the discovery document and of `GET
   /v1/meta` (for example `["1.0", "1.1"]`).
-- A **revision** (`1.1.13`) names a state of these documents within a minor version. It is never negotiated: a
+- A **revision** (`1.1.14`) names a state of these documents within a minor version. It is never negotiated: a
   revision only adds optional members, open enum values and capabilities, which each side discovers from the other's
   declarations ([section 8](#8-changes)). "1.1.N:" in these pages marks what revision N added.
 - **Minor** versions only add: new endpoints, new optional request fields, new response fields, new enum values,
@@ -249,6 +249,7 @@ specifies what it added.
 
 | Revision | Added |
 |---|---|
+| 1.1.14 | Each player's rating, tier and leaderboard position in the participant view of a match (`participants[].rating`, [api.md](api.md#participant-ratings-1114)). |
 | 1.1.13 | Relays that announce their load, error `503 relay_capacity`, the relay's refusal reasons shown to the player ([relay.md](relay.md#43-relays-that-announce-their-load-1113)). |
 | 1.1.12 | Stricter result decision: an error report never supports a result, and a rating needs each team's own confirmation ([api.md](api.md#result-decision)); what a launcher may send about its installation. |
 | 1.1.11 | The forfeit: a player who leaves a match in play can lose it, by policy ([leaving.md](leaving.md#4-forfeit-1111)). |

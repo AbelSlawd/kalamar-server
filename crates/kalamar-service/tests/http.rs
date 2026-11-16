@@ -996,3 +996,246 @@ loadouts = [{ id = "one", label = { en = "One weapon" }, loadout = { all = { wea
     assert_eq!(m["rules"]["loadout"]["all"]["weapon"]["fixed"], "weapon-a");
     s.running.stop();
 }
+
+/// An event stream of `user` without a connection: the test reads what the service pushes to it.
+fn listen(s: &Server, user: &str) {
+    let mut core = s.running.state.lock();
+    let id = format!("test-{user}");
+    core.live.streams.insert(
+        id.clone(),
+        kalamar_service::state::Stream {
+            id: id.clone(),
+            user_id: user.into(),
+            session_id: "test".into(),
+            seq: 0,
+            buffer: Default::default(),
+            tx: None,
+            conn: 0,
+            opened_at: 0,
+            closed_at: None,
+        },
+    );
+    core.live.user_streams.insert(user.into(), vec![id]);
+}
+
+/// The data of the last `kind` event pushed to `user`'s stream of [`listen`].
+fn last_pushed(s: &Server, user: &str, kind: &str) -> Value {
+    let core = s.running.state.lock();
+    core.live.streams[&format!("test-{user}")]
+        .buffer
+        .iter()
+        .rev()
+        .map(|(_, f)| serde_json::from_str::<Value>(f).unwrap())
+        .find(|e| e["type"] == kind)
+        .unwrap_or_else(|| panic!("no {kind} event"))["data"]
+        .clone()
+}
+
+/// 1.1.14: in the participant view, each player's rating, tier and leaderboard position on the match's ladder, read
+/// when the match object is built; never in the public view, nor in a match without a ladder.
+#[tokio::test]
+async fn participants_carry_their_rating_in_the_participant_view_only() {
+    let casual = r#"
+[[queues]]
+id = "casual"
+name = { en = "Casual" }
+teams = [1, 1]
+balance_ladder = "duel"
+pool = [{ mode = "turf" }]
+result_policy = "standard"
+"#;
+    let s = start(format!("{BASE_CONFIG}{casual}").parse().unwrap()).await;
+    let mut tokens = std::collections::HashMap::new();
+    let mut ids = std::collections::HashMap::new();
+    for name in [
+        "placed",
+        "rookie",
+        "hidden",
+        "fresh",
+        "top",
+        "roomhost",
+        "roomguest",
+        "viewer",
+    ] {
+        let t = s.login(name).await;
+        let (_, me) = s.call("GET", "/v1/me", Some(&t), None).await;
+        ids.insert(name, me["id"].as_str().unwrap().to_string());
+        tokens.insert(name, t);
+    }
+    let t = |name: &str| tokens[name].clone();
+    let (st, v) = s
+        .call(
+            "PATCH",
+            "/v1/me",
+            Some(&t("hidden")),
+            Some(r#"{"settings": {"show_on_leaderboards": false}}"#),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    // A rated queue match (`rules.ladder`) and an unrated one balanced on the same ladder.
+    let mut found = Vec::new();
+    for (queue, players) in [("duel", ["placed", "rookie"]), ("casual", ["hidden", "fresh"])] {
+        for p in players {
+            let (st, v) = s
+                .call("POST", &format!("/v1/queues/{queue}/tickets"), Some(&t(p)), Some("{}"))
+                .await;
+            assert_eq!(st, 201, "{v}");
+        }
+        s.call("POST", "/v1/_test/clock", None, Some(r#"{"advance_s": 0}"#))
+            .await;
+        let (_, cur) = s.call("GET", "/v1/matches/current", Some(&t(players[0])), None).await;
+        assert_eq!(cur["match"]["state"], "pending_accept", "{cur}");
+        found.push(cur["match"].clone());
+    }
+    let (rated, balanced) = (&found[0], &found[1]);
+    assert_eq!(rated["rules"]["ladder"], "duel");
+    assert!(balanced["rules"]["ladder"].is_null() && balanced["rules"]["season"].is_null());
+    let mid = rated["id"].as_str().unwrap().to_string();
+    let rating_of = |m: &Value, user: &str| {
+        m["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["user"]["id"] == ids[user].as_str())
+            .unwrap()
+            .get("rating")
+            .cloned()
+    };
+    // No rating yet: placement, all of it.
+    let nothing = json!({"ladder": "duel", "value": null, "display": null, "tier": null, "position": null,
+                         "provisional": {"remaining": 5}});
+    assert_eq!(rating_of(rated, "placed"), Some(nothing.clone()));
+    assert_eq!(rating_of(balanced, "fresh"), Some(nothing.clone()));
+    // Ratings are read live: those written now show in the next view. Shown value = rating - 2 x deviation.
+    let season = rated["rules"]["season"].as_str().unwrap().to_string();
+    {
+        let core = s.running.state.lock();
+        for (user, rating, deviation, games) in [
+            ("top", 1800.0, 50.0, 20),
+            ("hidden", 1900.0, 50.0, 30),
+            ("placed", 1600.0, 60.0, 8),
+            ("rookie", 1550.0, 200.0, 2),
+            ("roomhost", 1500.0, 50.0, 10),
+        ] {
+            core.db
+                .execute(
+                    "INSERT INTO ratings (user_id, ladder, season_id, rating, deviation, volatility, games, wins, losses)
+                     VALUES (?1, 'duel', ?2, ?3, ?4, 0.06, ?5, 0, 0)",
+                    rusqlite::params![ids[user], season, rating, deviation, games],
+                )
+                .unwrap();
+        }
+    }
+    listen(&s, &ids["rookie"]);
+    let (st, v) = s
+        .call("POST", &format!("/v1/matches/{mid}/accept"), Some(&t("placed")), None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (_, view) = s
+        .call("GET", &format!("/v1/matches/{mid}"), Some(&t("placed")), None)
+        .await;
+    // Placed: gold (1350 to 1550); second on the leaderboard, behind `top` (1700) and not behind the hidden player.
+    assert_eq!(
+        rating_of(&view, "placed"),
+        Some(json!({"ladder": "duel", "value": 1480, "display": "1480",
+                    "tier": {"id": "gold", "name": {"en": "Gold"}, "color": "#D4AF37", "order": 3},
+                    "position": 2, "provisional": null}))
+    );
+    let in_placement = json!({"ladder": "duel", "value": null, "display": null, "tier": null, "position": null,
+                              "provisional": {"remaining": 3}});
+    assert_eq!(rating_of(&view, "rookie"), Some(in_placement));
+    // The position is the leaderboard's own row; the push to the other player carries the same ratings.
+    let (_, board) = s
+        .call("GET", "/v1/ladders/duel/leaderboard", Some(&t("placed")), None)
+        .await;
+    assert_eq!(board["you"]["cells"]["rank"], 2, "{board}");
+    let pushed = last_pushed(&s, &ids["rookie"], "match.updated");
+    assert_eq!(pushed["participants"], view["participants"]);
+    // The hidden player: its rating and tier, never its position; the leaderboard still shows it its own row.
+    let (_, view) = s
+        .call(
+            "GET",
+            &format!("/v1/matches/{}", balanced["id"].as_str().unwrap()),
+            Some(&t("fresh")),
+            None,
+        )
+        .await;
+    assert_eq!(
+        rating_of(&view, "hidden"),
+        Some(json!({"ladder": "duel", "value": 1800, "display": "1800",
+                    "tier": {"id": "diamond", "name": {"en": "Diamond"}, "color": "#5B8DEF", "order": 5},
+                    "position": null, "provisional": null}))
+    );
+    let (_, board) = s
+        .call("GET", "/v1/ladders/duel/leaderboard", Some(&t("hidden")), None)
+        .await;
+    assert_eq!(board["you"]["cells"]["rank"], 1, "{board}");
+    // A room match has no ladder: no rating, even for a rated player.
+    let (_, room) = s.call("POST", "/v1/rooms", Some(&t("roomhost")), Some("{}")).await;
+    let rid = room["id"].as_str().unwrap();
+    s.call(
+        "POST",
+        "/v1/rooms/join",
+        Some(&t("roomguest")),
+        Some(&json!({"code": room["code"]}).to_string()),
+    )
+    .await;
+    s.call(
+        "POST",
+        &format!("/v1/rooms/{rid}/ready"),
+        Some(&t("roomguest")),
+        Some("{\"ready\": true}"),
+    )
+    .await;
+    let (st, m) = s
+        .call("POST", &format!("/v1/rooms/{rid}/start"), Some(&t("roomhost")), None)
+        .await;
+    assert_eq!(st, 201, "{m}");
+    assert!(m["rules"]["ladder"].is_null());
+    assert!(
+        m["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p.get("rating").is_none()),
+        "{m}"
+    );
+    // The rated match ends (void: both games failed): its players still see the ratings, others never.
+    let (st, v) = s
+        .call("POST", &format!("/v1/matches/{mid}/accept"), Some(&t("rookie")), None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let gid = last_pushed(&s, &ids["rookie"], "match.ready")["game"]["match_id"].clone();
+    for (p, code) in [("placed", "players-timeout"), ("rookie", "room-not-found")] {
+        let body = json!({"version": 1, "match_id": gid, "error": code, "reason": "test"});
+        let (st, v) = s
+            .call(
+                "POST",
+                &format!("/v1/matches/{mid}/result"),
+                Some(&t(p)),
+                Some(&body.to_string()),
+            )
+            .await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let ended = last_pushed(&s, &ids["rookie"], "match.void");
+    assert_eq!(rating_of(&ended, "placed").unwrap()["position"], 2);
+    let (_, own) = s
+        .call("GET", &format!("/v1/matches/{mid}"), Some(&t("rookie")), None)
+        .await;
+    assert_eq!(own["state"], "void");
+    assert_eq!(own["participants"], ended["participants"]);
+    let (st, public) = s
+        .call("GET", &format!("/v1/matches/{mid}"), Some(&t("viewer")), None)
+        .await;
+    assert_eq!(st, 200, "{public}");
+    assert!(
+        public["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p.get("rating").is_none() && p["user"]["id"].is_string()),
+        "{public}"
+    );
+    s.running.stop();
+}

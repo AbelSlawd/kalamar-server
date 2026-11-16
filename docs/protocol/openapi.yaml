@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Kalamar community protocol
   version: "1.1"
-  summary: 'HTTPS API between a launcher and a community service, protocol 1.1, revision 1.1.13 (additive over 1.0).'
+  summary: 'HTTPS API between a launcher and a community service, protocol 1.1, revision 1.1.14 (additive over 1.0).'
   description: >-
     Machine-readable form of api.md and of the 1.1 documents (activities.md, series.md, match-contract-2.md,
     presentation.md, operators.md, extending.md, draft.md, spectators.md, leaving.md, relay.md); when they differ, those documents win and the difference is a bug.
@@ -5013,6 +5013,36 @@ components:
         reported:
           type: boolean
           description: 'A terminal report (result or error) was received.'
+        rating:
+          $ref: '#/components/schemas/ParticipantRating'
+          description: '1.1.14, optional, participant view only (never in the public view): the player''s rating, tier and leaderboard position on the match''s ladder; absent without a ladder, without `ratings`, or for a seat without an account (api.md Matches, Participant ratings).'
+    ParticipantRating:
+      type: object
+      description: '1.1.14: a player''s rating as the match screens show it, read when the match object is sent (not a snapshot). `value`, `display`, `tier` and `provisional` are those of the rating view on `ladder` and the match''s season (`rules.season`, else the current one); a player without a rating yet is in placement.'
+      required: [ladder, value, display, tier, position, provisional]
+      properties:
+        ladder:
+          $ref: '#/components/schemas/Id'
+          description: '`rules.ladder` when set; a match without one MAY show another ladder (the reference server: the ladder its queue balances teams with).'
+        value:
+          type: [number, 'null']
+          description: 'The shown rating; `null` during placement.'
+        display:
+          type: [string, 'null']
+          description: 'How to show the rating, preferred over `value`; `null` during placement.'
+        tier:
+          description: '`null` during placement.'
+          oneOf: [{$ref: '#/components/schemas/Tier'}, {type: 'null'}]
+        position:
+          type: [integer, 'null']
+          minimum: 1
+          description: 'The place on the ladder''s leaderboard, 1 for the first (the `rank` of the player''s own leaderboard row `you`); `null` during placement, for a player who turned `show_on_leaderboards` off, and on a ladder without a leaderboard.'
+        provisional:
+          type: [object, 'null']
+          description: 'Placement matches left; `null` once placed.'
+          required: [remaining]
+          properties:
+            remaining: {type: integer, minimum: 0}
     ParticipantStatus:
       type: object
       required: [state, at]

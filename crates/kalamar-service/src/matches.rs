@@ -487,25 +487,57 @@ pub(crate) fn save(core: &Core, m: &LiveMatch) -> ApiResult<()> {
 
 /// The match object: the participant view for a participant (a player or, 1.1.7, a spectator), else the public view
 /// (ended matches only).
-pub fn match_json(_core: &Core, m: &LiveMatch, viewer: Option<&str>) -> Value {
+pub fn match_json(core: &Core, m: &LiveMatch, viewer: Option<&str>) -> Value {
+    // 1.1.14: the players' ratings are the participants' business, never in the public view.
+    let ratings = if viewer.is_some_and(|v| m.involves(v)) {
+        crate::api::ratings::participant_ratings(core, m)
+    } else {
+        Vec::new()
+    };
+    match_view(m, viewer, &ratings)
+}
+
+/// The participant views of `m` for `users` (players and spectators): the players' ratings are read once for all.
+fn participant_views(core: &Core, m: &LiveMatch, users: Vec<String>) -> Vec<(String, Value)> {
+    if users.is_empty() {
+        return Vec::new();
+    }
+    let ratings = crate::api::ratings::participant_ratings(core, m);
+    users
+        .into_iter()
+        .map(|u| {
+            let v = match_view(m, Some(&u), &ratings);
+            (u, v)
+        })
+        .collect()
+}
+
+/// [`match_json`] with the players' ratings (`participants[].rating`, 1.1.14) already read, in seat order.
+fn match_view(m: &LiveMatch, viewer: Option<&str>, ratings: &[Option<Value>]) -> Value {
     let me = viewer.and_then(|v| m.seat_of(v));
     let watcher = viewer.and_then(|v| m.spectator_of(v));
     let participant = me.is_some() || watcher.is_some();
     let participants: Vec<Value> = m
         .seats
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let user = match &s.user_id {
                 Some(u) => json!({"id": u, "display_name": s.display_name}),
                 None => json!({"id": null, "display_name": ""}),
             };
             if participant {
-                json!({
+                let mut p = json!({
                     "user": user, "member_name": s.member_name, "team": s.team.as_str(), "role": s.role.as_str(),
                     "accept": s.accept, "launched": s.launched_at.is_some(),
                     "status": s.status_state.as_ref().map(|st| json!({"state": st, "at": s.status_at.map(rfc3339)})),
                     "reported": s.report.is_some(),
-                })
+                });
+                // 1.1.14: the player's rating, tier and leaderboard position on the match's ladder.
+                if let Some(r) = ratings.get(i).and_then(Option::as_ref) {
+                    p["rating"] = r.clone();
+                }
+                p
             } else {
                 json!({"user": user, "team": s.team.as_str()})
             }
@@ -619,12 +651,8 @@ pub fn match_json(_core: &Core, m: &LiveMatch, viewer: Option<&str>) -> Value {
 /// Sends a `match.*` event with the participant view to the participants (players, spectators) among `users`.
 pub(crate) fn notify_users(core: &mut Core, mid: &str, kind: &str, users: &[String]) {
     let Some(m) = core.live.matches.get(mid) else { return };
-    let views: Vec<(String, Value)> = m
-        .users()
-        .into_iter()
-        .filter(|u| users.contains(u))
-        .map(|u| (u.clone(), match_json(core, m, Some(&u))))
-        .collect();
+    let to: Vec<String> = m.users().into_iter().filter(|u| users.contains(u)).collect();
+    let views = participant_views(core, m, to);
     for (u, v) in views {
         core.push(&u, kind, v);
     }
@@ -658,20 +686,19 @@ pub(crate) fn reseat(m: &mut LiveMatch) {
 /// in its next match is not shown this one again; the decision (`match.completed`, `match.void`) still reaches it.
 pub(crate) fn notify(core: &mut Core, mid: &str, kind: &str) {
     let Some(m) = core.live.matches.get(mid) else { return };
-    let views: Vec<(String, Value)> = m
+    let to: Vec<String> = m
         .users()
         .into_iter()
         .filter(|u| kind != "match.updated" || !is_free(m, u))
-        .map(|u| (u.clone(), match_json(core, m, Some(&u))))
         .collect();
+    let views = participant_views(core, m, to);
     for (u, v) in views {
         core.push(&u, kind, v);
     }
 }
 
 pub(crate) fn notify_ended(core: &mut Core, m: &LiveMatch, kind: &str) {
-    for u in m.users() {
-        let v = match_json(core, m, Some(&u));
+    for (u, v) in participant_views(core, m, m.users()) {
         core.push(&u, kind, v);
     }
 }

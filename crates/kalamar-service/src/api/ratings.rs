@@ -117,6 +117,87 @@ fn view(core: &Core, ladder: &str, season: &str, row: &Row) -> Value {
     })
 }
 
+/// The place on `ladder`'s leaderboard of a placed player whose shown rating is `shown`: one more than the number of
+/// listed players (placed, `show_on_leaderboards` on) with a strictly better shown rating.
+fn leaderboard_rank(core: &Core, ladder: &str, season: &str, shown: f64) -> i64 {
+    let p = &core.cfg.rating;
+    let better: i64 = core
+        .db
+        .query_row(
+            "SELECT COUNT(*) FROM ratings r JOIN users u ON u.id = r.user_id WHERE r.ladder = ?1 AND r.season_id = ?2
+             AND r.games >= ?3 AND u.show_on_leaderboards = 1 AND r.rating - ?4 * r.deviation > ?5",
+            params![ladder, season, p.placement_games, p.display_deviations, shown],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    better + 1
+}
+
+/// 1.1.14: the ladder a match shows its players' ratings on: the one it is rated on, else the one its queue balances
+/// teams with (`balance_ladder`, an unrated queue).
+fn match_ladder(core: &Core, m: &LiveMatch) -> Option<String> {
+    m.rules.ladder.clone().or_else(|| {
+        let q = core.cfg.queue(&m.origin_id).filter(|_| m.origin_kind == "queue")?;
+        q.balance_ladder.clone()
+    })
+}
+
+/// 1.1.14: `participants[].rating` of every player seat of `m`, in seat order (`None`: no member), as the ratings
+/// are now. For the participant view only; computed once per view, or once for every view of one push.
+pub fn participant_ratings(core: &Core, m: &LiveMatch) -> Vec<Option<Value>> {
+    let none = || vec![None; m.seats.len()];
+    let Some(ladder) = match_ladder(core, m).filter(|_| core.cfg.features.ratings) else {
+        return none();
+    };
+    let season = match &m.rules.season {
+        Some(s) => s.clone(),
+        None => match crate::db::current_season(&core.db, core.now) {
+            Ok(s) => s.0,
+            Err(_) => return none(),
+        },
+    };
+    // Positions are leaderboard data: none on a ladder without a leaderboard.
+    let board = core.cfg.features.leaderboards && core.cfg.ladder(&ladder).is_some_and(|l| l.leaderboard);
+    m.seats
+        .iter()
+        .map(|s| {
+            let user = s.user_id.as_deref()?;
+            Some(participant_rating(core, user, &ladder, &season, board))
+        })
+        .collect()
+}
+
+/// The rating of one player in a match: the rating view's `value`, `display`, `tier` and `provisional` (a player
+/// without a rating yet starts placement), and the leaderboard position of a placed player who did not leave the
+/// leaderboards.
+fn participant_rating(core: &Core, user: &str, ladder: &str, season: &str, board: bool) -> Value {
+    let p = &core.cfg.rating;
+    let row = load_row(core, user, ladder, season);
+    let r = row.as_ref().map(|row| row.r).unwrap_or_else(|| Rating::initial(p));
+    let (value, tier) = shown(core, &r);
+    let remaining = (p.placement_games - r.games).max(0);
+    let listed = || {
+        core.db
+            .query_row("SELECT show_on_leaderboards FROM users WHERE id = ?1", [user], |c| {
+                c.get::<_, i64>(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
+            == Some(1)
+    };
+    let position = (board && row.is_some() && value.is_some() && listed())
+        .then(|| leaderboard_rank(core, ladder, season, r.shown(p)));
+    json!({
+        "ladder": ladder,
+        "value": value,
+        "display": value.map(|v| v.to_string()),
+        "tier": tier,
+        "position": position,
+        "provisional": (remaining > 0).then(|| json!({"remaining": remaining})),
+    })
+}
+
 /// Rates a decided match; returns the rating changes of the outcome.
 pub fn apply_match(core: &mut Core, m: &LiveMatch, d: &Decision) -> ApiResult<Vec<Value>> {
     let (Some(ladder), Some(winner)) = (m.rules.ladder.clone(), d.winner) else {
@@ -381,19 +462,12 @@ pub async fn leaderboard(
         .map(|(i, (u, r, w))| cell(offset + i + 1, u, r, *w))
         .collect();
     // The caller's own row.
-    let you = load_row(&core, &a.user, &ladder, &season).filter(|r| r.r.games >= p.placement_games).map(|row| {
-        let shown_v = row.r.shown(p);
-        let better: i64 = core
-            .db
-            .query_row(
-                "SELECT COUNT(*) FROM ratings r JOIN users u ON u.id = r.user_id WHERE r.ladder = ?1 AND r.season_id = ?2
-                 AND r.games >= ?3 AND u.show_on_leaderboards = 1 AND r.rating - ?4 * r.deviation > ?5",
-                params![ladder, season, p.placement_games, p.display_deviations, shown_v],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        cell(better as usize + 1, &a.user, &row.r, row.wins)
-    });
+    let you = load_row(&core, &a.user, &ladder, &season)
+        .filter(|r| r.r.games >= p.placement_games)
+        .map(|row| {
+            let rank = leaderboard_rank(&core, &ladder, &season, row.r.shown(p));
+            cell(rank as usize, &a.user, &row.r, row.wins)
+        });
     Ok(Json(json!({
         "ladder": ladder,
         "season": season,

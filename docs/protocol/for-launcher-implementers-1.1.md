@@ -147,6 +147,14 @@ Nothing here is needed: a launcher that ignores `meta.relays` plays on the relay
 43. Translate the engine errors `relay-full`, `relay-room-full`, `relay-source-limit` and `relay-source-full`
     ([match-contract-2.md](match-contract-2.md#7-reports-of-contract-2)); report them as any engine error.
 
+## May: every player's rank in a match (1.1.14, [api.md](api.md#participant-ratings-1114))
+
+Nothing here is needed: a launcher that ignores `participants[].rating` shows the match as before.
+
+44. Show each player's `rating` on the match screens: `display` (else `value`) and the tier, the leaderboard
+    `position` when it is not `null`, and the placement matches left (`provisional.remaining`) during placement. A
+    player without `rating` shows none; every new match object replaces the values.
+
 ## Never
 
 Execute anything from a server, load an image or a URL by itself, disable TLS, let the game contact anything but the
